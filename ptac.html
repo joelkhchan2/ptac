@@ -1,0 +1,294 @@
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#0a84ff">
+
+<title>PTAC Control</title>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+
+<style>
+  body { font-family: Arial, sans-serif; margin: 18px; }
+  h2 { margin-bottom: 8px; }
+
+  .topbar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+  .status { font-size: 14px; color:#666; }
+  .pill { display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid #ccc; background:#f4f4f4; font-size:14px; }
+  .pill.on { background:#e8f1ff; border-color:#9cc3ff; color:#0a59d1; }
+
+  .slider { width: 100%; margin: 12px 0 10px; }
+  .sliderWrap { opacity: 0.55; transition: opacity 120ms; }
+  .sliderWrap.enabled { opacity: 1; }
+
+  .row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  button {
+    padding: 10px 14px;
+    font-size: 16px;
+    border-radius: 10px;
+    border: 1px solid #ccc;
+    background: #f4f4f4;
+  }
+  button.primary { background:#0a84ff; border-color:#0a84ff; color:#fff; }
+  button.danger { background:#fff0f0; border-color:#ffb3b3; }
+  button:disabled { opacity:0.5; }
+
+  h3 { margin-top: 18px; }
+
+  .mode {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .label { width: 90px; font-weight: bold; }
+
+  button.go.active {
+    background: #0a84ff;
+    color: #fff;
+    border-color: #0a84ff;
+  }
+
+  .small { color: #666; font-size: 14px; margin-top: 12px; line-height:1.4; }
+  .hint { font-size: 13px; color:#777; margin-top:8px; }
+</style>
+</head>
+
+<body>
+
+<div class="topbar">
+  <div>
+    <h2 style="margin:0;">PTAC Servo Control</h2>
+    <div class="status">
+      Connection: <span id="conn">connecting…</span>
+      • Last update: <span id="last">—</span>
+    </div>
+  </div>
+
+  <div class="row">
+    <span id="modePill" class="pill">Mode: Presets</span>
+    <button id="manualBtn">Enable Manual</button>
+  </div>
+</div>
+
+<hr style="border:none;border-top:1px solid #eee;margin:14px 0;">
+
+<p style="margin:0 0 6px;">
+  Angle: <b><span id="degVal">90</span>°</b>
+</p>
+
+<div id="sliderWrap" class="sliderWrap">
+  <input
+    id="degSlider"
+    class="slider"
+    type="range"
+    min="0"
+    max="180"
+    step="1"
+    value="90"
+    disabled
+  >
+  <div class="hint" id="manualHint">Manual is off. Enable Manual to use the slider.</div>
+</div>
+
+<div class="row" style="margin-top:10px;">
+  <button class="danger" id="stopBtn">OFF</button>
+  <span class="hint">Tip: Use presets for normal operation. Use Manual only to calibrate.</span>
+</div>
+
+<h3>Modes</h3>
+<div id="modes"></div>
+
+<p class="small">
+  Calibration: Enable Manual → move the slider until the PTAC dial is correct → press <b>Set</b> for that mode.
+</p>
+
+<script>
+/* ======================================================
+   CONFIG — EXACT PARITY WITH ORIGINAL LOCAL VERSION
+====================================================== */
+const SERVO_US_MIN = 500;
+const SERVO_US_MAX = 2500;
+
+const WS   = "wss://dca586b57e5d4379bae898ca52b42a6c.s1.eu.hivemq.cloud:8884/mqtt";
+const USER = "hivemq.webclient.1767404971639";
+const PASS = "1q%&*aZ,CmSM063gHfDu";
+const BASE = "ptac/joel_a83f2";
+
+const MODES = [
+  { key: "OFF",   label: "OFF" },
+  { key: "HEAT3", label: "HEAT 3" },
+  { key: "HEAT2", label: "HEAT 2" },
+  { key: "COOL3", label: "COOL 3" },
+  { key: "COOL2", label: "COOL 2" }
+];
+
+/* ======================================================
+   MAPPING (DEG <-> US)
+====================================================== */
+function degToUs(deg) {
+  return Math.round(SERVO_US_MIN + (deg / 180) * (SERVO_US_MAX - SERVO_US_MIN));
+}
+function usToDeg(us) {
+  return Math.round(((us - SERVO_US_MIN) / (SERVO_US_MAX - SERVO_US_MIN)) * 180);
+}
+
+/* ======================================================
+   THROTTLE / LOCKOUT
+   - Slider publishes at most every THROTTLE_MS
+   - Also skips publishes if value unchanged
+====================================================== */
+const THROTTLE_MS = 120; // smooth enough, avoids spamming
+let lastPublishAt = 0;
+let lastSentUs = null;
+
+function throttledPublishUs(us) {
+  const now = Date.now();
+  if (lastSentUs === us) return;
+  if (now - lastPublishAt < THROTTLE_MS) return;
+
+  lastPublishAt = now;
+  lastSentUs = us;
+  client.publish(`${BASE}/cmd/us`, String(us));
+}
+
+/* ======================================================
+   MQTT
+====================================================== */
+const connEl = document.getElementById("conn");
+const lastEl = document.getElementById("last");
+
+const client = mqtt.connect(WS, {
+  username: USER,
+  password: PASS,
+  clean: true,
+  connectTimeout: 10000,
+  reconnectPeriod: 2000
+});
+
+client.on("connect", () => {
+  connEl.textContent = "connected";
+  client.subscribe(`${BASE}/state`);
+});
+
+client.on("reconnect", () => { connEl.textContent = "reconnecting…"; });
+client.on("offline", () => { connEl.textContent = "offline"; });
+client.on("error", () => { connEl.textContent = "error"; });
+
+client.on("message", (_, payload) => {
+  try {
+    const s = JSON.parse(payload.toString());
+
+    // update "last update"
+    lastEl.textContent = new Date().toLocaleTimeString();
+
+    // update slider + display from ESP32 state
+    if (typeof s.us === "number") {
+      const d = usToDeg(s.us);
+      degSlider.value = d;
+      degVal.innerText = d;
+    }
+
+    // highlight active mode when a GO is executed
+    if (s.reason && s.reason.startsWith("go_")) {
+      const m = s.reason.replace("go_", "");
+      setActive(m);
+      // Leaving manual mode OFF after preset commands prevents accidental override
+      setManual(false);
+    }
+
+    // if OFF executed
+    if (s.reason && (s.reason === "go_OFF" || s.reason === "save_OFF")) {
+      setActive("OFF");
+    }
+  } catch {}
+});
+
+/* ======================================================
+   UI
+====================================================== */
+const degSlider  = document.getElementById("degSlider");
+const degVal     = document.getElementById("degVal");
+const modesDiv   = document.getElementById("modes");
+const manualBtn  = document.getElementById("manualBtn");
+const sliderWrap = document.getElementById("sliderWrap");
+const manualHint = document.getElementById("manualHint");
+const modePill   = document.getElementById("modePill");
+const stopBtn    = document.getElementById("stopBtn");
+
+let manualEnabled = false;
+
+function setManual(on) {
+  manualEnabled = on;
+  degSlider.disabled = !on;
+  sliderWrap.classList.toggle("enabled", on);
+
+  if (on) {
+    manualBtn.textContent = "Disable Manual";
+    modePill.textContent = "Mode: Manual";
+    modePill.classList.add("on");
+    manualHint.textContent = "Manual is on. Moving the slider will move the servo.";
+  } else {
+    manualBtn.textContent = "Enable Manual";
+    modePill.textContent = "Mode: Presets";
+    modePill.classList.remove("on");
+    manualHint.textContent = "Manual is off. Enable Manual to use the slider.";
+  }
+}
+
+manualBtn.onclick = () => setManual(!manualEnabled);
+
+degSlider.oninput = () => {
+  const deg = parseInt(degSlider.value, 10);
+  degVal.innerText = deg;
+
+  if (!manualEnabled) return; // hard block
+  const us = degToUs(deg);
+  throttledPublishUs(us);
+};
+
+function setActive(modeKey) {
+  document.querySelectorAll(".go").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.mode === modeKey);
+  });
+}
+
+stopBtn.onclick = () => {
+  client.publish(`${BASE}/cmd/go/OFF`, "1");
+};
+
+/* Build mode rows */
+MODES.forEach(m => {
+  const row = document.createElement("div");
+  row.className = "mode";
+  row.innerHTML = `
+    <div class="label">${m.label}</div>
+    <button class="go" data-mode="${m.key}">GO</button>
+    <button class="set">Set</button>
+  `;
+
+  row.querySelector(".go").onclick = () => {
+    client.publish(`${BASE}/cmd/go/${m.key}`, "1");
+  };
+
+  row.querySelector(".set").onclick = () => {
+    // Require manual to calibrate (prevents accidental re-saving)
+    if (!manualEnabled) {
+      alert("Enable Manual first to calibrate.");
+      return;
+    }
+    const deg = parseInt(degSlider.value, 10);
+    const us  = degToUs(deg);
+    client.publish(`${BASE}/cmd/save/${m.key}`, String(us));
+  };
+
+  modesDiv.appendChild(row);
+});
+
+// start with manual OFF
+setManual(false);
+</script>
+
+</body>
+</html>
