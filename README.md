@@ -67,4 +67,4 @@ Open the page, Enable Manual, move the slider until the knob sits on the right m
 
 ## Status
 
-Firmware flashed 2026-10-08 and connects to the broker; servo behavior not yet bench-tested. See `docs/hardware.md` for the open issues (dead servo, power, mounting) and `docs/test-plan.md` for the order to verify them.
+As of 2026-10-08 the web page controls the servo end to end (page -> HiveMQ -> ESP32 -> servo). Still open: servo power for the long term, range finding, the knob mount, calibration and the soak/hold tests. See `docs/hardware.md` for hardware findings and `docs/test-plan.md` for the order to verify.

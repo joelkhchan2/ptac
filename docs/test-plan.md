@@ -2,13 +2,13 @@
 
 Do these in order. Stop at the first failure. No multimeter needed.
 
-## Gate 0: check the existing rig
+## Gate 0: check the existing rig (done 2026-10-08: board OK, first servo dead, second works)
 - [ ] Photograph and write down the printed ratings of both power supplies (volts, amps, polarity, connector). Record them in `hardware.md`.
 - [ ] Confirm the servo's brown (GND) lead goes to an ESP32 GND pin, orange to D13, and red only to the 5V adapter.
 - [ ] Unplug the dead servo. Check the ESP32 and the adapter are not hot, discolored or smelling burnt.
 - [ ] Confirm the ESP32 still uploads a sketch.
 
-## Gate 1: servo alone, off the PTAC
+## Gate 1: servo alone, off the PTAC (partly done 2026-10-08: moves on command with the horn free, powered from VIN over USB; still check it stays cool and silent at rest, and power from the final supply)
 - [ ] Horn removed from the knob, servo free on the bench. Power it from the supply that will feed it in service, with its ground tied to an ESP32 GND pin.
 - [ ] Flash the new firmware (do not erase flash, to keep saved presets).
 - [ ] Send `cmd/us` values from the web page in Manual mode. Servo moves, goes silent about a second later, and feels cool at rest.

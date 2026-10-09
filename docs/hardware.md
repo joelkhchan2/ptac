@@ -17,7 +17,7 @@ Do not touch the unit's mains-side wiring. The robot only turns the front-panel 
 ## Current rig
 
 - ESP32 dev board (ELEGOO ESP-32, 30-pin, USB-C, CP2102), jumper wires (ELEGOO Dupont set).
-- Servo: Miuzei MG996R metal gear. Two purchased; the first is dead, the spare is the one to use. 4.8-7.2 V, about 15 kg-cm stall at 6 V, up to ~2.5 A stalled.
+- Servo: Miuzei MG996R metal gear. Two purchased; the first is dead, the second (spare) works and is in use. No third. 4.8-7.2 V, about 15 kg-cm stall at 6 V, up to ~2.5 A stalled.
 - Servo is screwed to a wooden block on the shelf above the unit. The servo arm is duct-taped to the knob and currently removed from the servo.
 - ESP32 and wiring sit on top of the PTAC discharge grille (warm air in heat mode).
 
@@ -35,7 +35,7 @@ Still to confirm:
 3. The Arkare adapter's rating (a 5V 2A supply is undersized for an MG996R, which can pull ~2.5 A stalled).
 ## Known problems
 
-1. **Servo overheated and died.** The old firmware attached the servo at boot and never detached, so it held torque against the knob continuously. The new firmware only powers the servo for a move plus 1 s, caps continuous on-time at 6 s with a 6 s cooldown, and never moves at boot. The spare must be bench tested before use (`test-plan.md`).
+1. **First servo overheated and died; the spare works.** The old firmware attached the servo at boot and never detached, so it held torque against the knob continuously. The new firmware only powers the servo for a move plus 1 s, caps continuous on-time at 6 s with a 6 s cooldown, and never moves at boot. The spare must be bench tested before use (`test-plan.md`).
 2. **Power.** Plan: servo supply 5-6 V and 3 A or more, servo ground tied to ESP32 GND, 470-1000 uF capacitor across the servo supply, 10k pull-down on the signal line. Optionally switch servo power with a MOSFET or relay.
 3. **Mounting.** Duct tape on the knob melts and loosens. Plan: 3D-printed (PETG/ASA, not PLA) cap that fits over the knob, plus a servo bracket fixed to the panel or unit, coaxial with the knob or offset with a printed gear pair. Printing is done by a family member. Needs measurements first: knob diameter and height, clearance above the panel, mounting surface. Owner chose to keep the MG996R (no lower-torque servo).
 4. **Electronics placement.** Move the ESP32 and wiring off the discharge grille into a small box out of the airflow, before the soak test.
