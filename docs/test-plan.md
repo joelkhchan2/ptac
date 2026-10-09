@@ -4,7 +4,7 @@ Do these in order. Stop at the first failure. No multimeter needed.
 
 ## Gate 0: check the existing rig
 - [ ] Photograph and write down the printed ratings of both power supplies (volts, amps, polarity, connector). Record them in `hardware.md`.
-- [ ] Identify the white block and the beige cable. If they are mains-voltage conductors spliced and taped, replace with a proper enclosed adapter first.
+- [ ] Confirm the servo's brown (GND) lead goes to an ESP32 GND pin, orange to D13, and red only to the 5V adapter.
 - [ ] Unplug the dead servo. Check the ESP32 and the adapter are not hot, discolored or smelling burnt.
 - [ ] Confirm the ESP32 still uploads a sketch.
 

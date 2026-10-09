@@ -23,17 +23,16 @@ Do not touch the unit's mains-side wiring. The robot only turns the front-panel 
 
 ### Power (two plugs, both to wall outlets)
 
-Owner-reported: one plug for the servo, one for the ESP32 board (which is which is not confirmed).
+From the photos (2026-10-08) and owner description:
 
-- **Black cable with a black wall adapter** plugged into a wall outlet near the floor on the left. This is the Arkare 5V 2A adapter (`B09W96X88K`, 5.5x2.5 mm barrel, center positive). Its thin black cable runs along the baseboard under the unit and up to the top.
-- **Beige/cream cable** from a multi-outlet strip beside it, run along the baseboard and up behind the unit. At the top its cores fan out and go into a small white block, from which thin wires lead to the ESP32.
+- **ESP32:** powered over its USB-C port by a black USB-C cable from a small white 2-port USB wall charger. The charger plugs into a beige extension cord/outlet tap that runs down the baseboard to the multi-outlet strip. This is a normal charger on a normal cord; no spliced mains wiring is involved. (An earlier note here suspected exposed mains wiring. That was a misreading of the first photos and is retracted.)
+- **Servo:** powered from the black Arkare 5V 2A wall adapter (`B09W96X88K`, center positive). Its output goes through a barrel-to-terminal DC adapter to loose jumper wires that run across the top of the unit to the servo's red (V+) and brown (GND) leads. The servo's orange lead is the signal line from the ESP32.
+- At the ESP32, two black jumper wires plug into the bottom pin header near D13 and GND, with the servo's signal and ground leads joined to them by Dupont connectors. This suggests the servo ground and ESP32 ground are tied (shared ground), but it is not confirmed.
 
-Not confirmed (answer these in the repo when known):
-1. Which supply feeds the servo and which feeds the ESP32.
-2. What the white block is and its printed ratings. If the beige cable is a mains cord and the white block is an AC-DC module, then mains-voltage conductors are spliced and taped on top of the heater unit. That must be replaced with a proper enclosed power adapter before further use.
-3. Whether the servo supply ground is connected to an ESP32 GND pin. With two separate supplies this is likely missing; without it the servo signal has no reference and the servo can twitch.
-4. Rating of the servo supply (a 5V 2A adapter is undersized for an MG996R, which can pull ~2.5 A stalled).
-
+Still to confirm:
+1. That the servo's brown (GND) lead really connects to an ESP32 GND pin, and the servo's orange lead to D13.
+2. That the servo's red lead connects only to the Arkare 5V supply and not to an ESP32 pin.
+3. The Arkare adapter's rating (a 5V 2A supply is undersized for an MG996R, which can pull ~2.5 A stalled).
 ## Known problems
 
 1. **Servo overheated and died.** The old firmware attached the servo at boot and never detached, so it held torque against the knob continuously. The new firmware only powers the servo for a move plus 1 s, caps continuous on-time at 6 s with a 6 s cooldown, and never moves at boot. The spare must be bench tested before use (`test-plan.md`).
@@ -66,6 +65,6 @@ Photos are kept locally, not in this repo. What they showed (2026-10-01):
 **Rig layout.**
 - Unit is wall-mounted low in a corner next to a window with a curtain, with a shelf/ledge above it. A black louvered discharge grille is on the top right and a screened intake on the top left (mesh taped over).
 - Servo (Miuzei MG996R, label reads "996 Servo All-metal") is mounted on a wooden block wrapped in grey duct tape, sitting on the ledge to the right above the unit. Its orange/red/brown lead runs down to a 3-pin Dupont plug that was lying on the discharge grille.
-- The ESP32 board sits on top of the unit at the grille edge, with a bundle of jumper wires running left along the top to the small white block (see Power above).
-- The black Arkare adapter is plugged into the wall near the floor; the beige cable goes to a multi-outlet strip next to it. Both run along the baseboard and up to the top of the unit.
+- The ESP32 board sits on top of the unit at the grille edge, powered by a USB-C cable from the white USB charger (see Power above).
+- The black Arkare adapter and the beige extension cord (feeding the white USB charger) both run along the baseboard and up to the top of the unit.
 - At the time of the photos the servo arm was detached from the servo but still taped to the knob.

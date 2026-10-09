@@ -9,7 +9,7 @@ ESP32 + servo robot that turns the fan/mode knob on a PTAC unit, controlled via 
 - The servo must never be held powered when idle. Keep attach-move-hold-detach, the 6 s continuous cap plus cooldown, and no boot-time movement. Never run a blocking network call while the servo is attached.
 - Validate all MQTT payloads; presets are a fixed whitelist (OFF, HEAT3, HEAT2, COOL3, COOL2). Reject rather than clamp.
 - Ignore commands in the first 2 s after subscribe (retained-command replay protection). Do not remove the `status` last-will.
-- Do not touch the PTAC's mains wiring. Mechanical actuation of the knob only. Flag any exposed mains wiring in the rig.
+- Do not touch the PTAC's mains wiring. Mechanical actuation of the knob only.
 - Presets (calibrated knob positions) live in the ESP32's flash under NVS namespace `ptac`. Do not rename the namespace or the keys; erasing flash loses calibration.
 - `SERVO_MIN_US` / `SERVO_MAX_US` and the UI deg-to-us mapping must be changed together, only after bench-finding the real range.
 - Status: firmware compiles clean (arduino-cli, esp32:esp32:esp32, core 3.3.12) but has not been flashed or bench-tested. Do not call it working until `docs/test-plan.md` gates 0-4 pass.
@@ -26,7 +26,7 @@ Concise answers, no emojis, make reasonable calls instead of asking, do only wha
 
 ## Open work
 
-1. Gate 0 of the test plan: record both power supplies, identify the white block / beige cable (possible exposed mains splice), check the ESP32 and adapter after the servo failure.
+1. Gate 0 of the test plan: record both power supplies, confirm the servo ground is tied to an ESP32 GND pin, check the ESP32 and adapter after the servo failure.
 2. HiveMQ: restrict the web user, add a separate robot user, rotate credentials that were ever pushed (see README "Broker setup").
 3. Dedicated servo supply, common ground, capacitor, pull-down (docs/hardware.md).
 4. Bench-find the servo range, then flash and run the test plan with the spare MG996R.
