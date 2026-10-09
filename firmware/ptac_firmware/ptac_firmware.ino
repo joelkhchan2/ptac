@@ -4,6 +4,7 @@
 #include <Preferences.h>
 #include <ESP32Servo.h>
 #include <time.h>
+#include <esp_system.h>
 #include "secrets.h"
 #include "isrg_root_x1.h"
 
@@ -15,6 +16,7 @@
     ptac/joel_a83f2/cmd/go/<MODE>     payload: anything
     ptac/joel_a83f2/state             retained {"us":N,"reason":"..."}
     ptac/joel_a83f2/status            retained "online" / "offline" (last will)
+    ptac/joel_a83f2/diag              retained diagnostics: uptime, rssi, heap, last events
   Modes: OFF, HEAT3, HEAT2, COOL3, COOL2.
   The servo is powered only while moving plus HOLD_MS, never longer than
   MAX_ATTACH_MS in a row, followed by COOLDOWN_MS in which moves are refused.
@@ -27,6 +29,7 @@ const char* TOPIC_SAVE       = "ptac/joel_a83f2/cmd/save/";
 const char* TOPIC_GO         = "ptac/joel_a83f2/cmd/go/";
 const char* TOPIC_STATE      = "ptac/joel_a83f2/state";
 const char* TOPIC_STATUS     = "ptac/joel_a83f2/status";
+const char* TOPIC_DIAG       = "ptac/joel_a83f2/diag";
 
 const char* PRESETS[] = {"OFF", "HEAT3", "HEAT2", "COOL3", "COOL2"};
 
@@ -62,6 +65,54 @@ unsigned long nextMqttAttempt = 0;
 unsigned long nextWifiAttempt = 0;
 unsigned long wifiLostAt = 0;
 
+const int EV_MAX = 8;
+String events[EV_MAX];
+int eventCount = 0;
+unsigned long lastDiagAt = 0;
+bool diagDirty = false;
+
+String resetReasonName() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:   return "poweron";
+    case ESP_RST_SW:        return "software";
+    case ESP_RST_PANIC:     return "panic";
+    case ESP_RST_INT_WDT:   return "int_wdt";
+    case ESP_RST_TASK_WDT:  return "task_wdt";
+    case ESP_RST_WDT:       return "wdt";
+    case ESP_RST_BROWNOUT:  return "brownout";
+    case ESP_RST_DEEPSLEEP: return "deepsleep";
+    default:                return "other";
+  }
+}
+
+void publishDiag(bool force) {
+  if (!mqtt.connected()) return;
+  if (!force && millis() - lastDiagAt < 1000) {
+    diagDirty = true;
+    return;
+  }
+  lastDiagAt = millis();
+  diagDirty = false;
+  String j = String("{\"up\":") + (millis() / 1000) + ",\"rssi\":" + WiFi.RSSI() + ",\"heap\":" + ESP.getFreeHeap() + ",\"ev\":[";
+  for (int i = 0; i < eventCount; i++) {
+    if (i) j += ",";
+    j += "\"" + events[i] + "\"";
+  }
+  j += "]}";
+  mqtt.publish(TOPIC_DIAG, j.c_str(), true);
+}
+
+void logEvent(const String& e, bool force = false) {
+  String line = String(millis() / 1000) + "s " + e;
+  Serial.println("EV " + line);
+  if (eventCount == EV_MAX) {
+    for (int i = 1; i < EV_MAX; i++) events[i - 1] = events[i];
+    eventCount--;
+  }
+  events[eventCount++] = line;
+  publishDiag(force);
+}
+
 bool reached(unsigned long t) {
   return (long)(millis() - t) >= 0;
 }
@@ -82,8 +133,9 @@ bool isPreset(const String& s) {
   return false;
 }
 
-void releaseServo() {
+void releaseServo(bool forced = false) {
   if (servo.attached()) {
+    logEvent(forced ? "release forced" : "release");
     servo.detach();
     pinMode(SERVO_PIN, OUTPUT);
     digitalWrite(SERVO_PIN, LOW);
@@ -102,7 +154,7 @@ void releaseIfIdle() {
   if (reached(releaseAt)) {
     releaseServo();
   } else if (millis() - attachedSince >= MAX_ATTACH_MS) {
-    releaseServo();
+    releaseServo(true);
     cooldownUntil = millis() + COOLDOWN_MS;
   }
 }
@@ -114,6 +166,7 @@ bool moveToUs(int us) {
     servo.setPeriodHertz(50);
     servo.attach(SERVO_PIN, SERVO_MIN_US, SERVO_MAX_US);
     attachedSince = millis();
+    logEvent(String("attach us=") + currentUs);
   }
   servo.writeMicroseconds(currentUs);
   releaseAt = millis() + HOLD_MS;
@@ -122,6 +175,7 @@ bool moveToUs(int us) {
 }
 
 void publishState(const String& reason) {
+  logEvent("state " + reason + " us=" + currentUs);
   String msg = String("{\"us\":") + currentUs + ",\"reason\":\"" + reason + "\"}";
   mqtt.publish(TOPIC_STATE, msg.c_str(), true);
 }
@@ -225,7 +279,7 @@ void maintainWiFi() {
   }
   if (wifiLostAt == 0) {
     wifiLostAt = millis();
-    Serial.println("WiFi lost");
+    logEvent("wifi_lost");
   }
   if (reached(nextWifiAttempt)) {
     nextWifiAttempt = millis() + WIFI_RETRY_MS;
@@ -260,6 +314,7 @@ void tryConnectMQTT() {
     Serial.print(TOPIC_CMD_ALL);
     Serial.println(subOk ? " ok" : " failed");
     armAt = millis() + CMD_ARM_DELAY_MS;
+    logEvent("mqtt_connected", true);
     mqtt.publish(TOPIC_STATUS, "online", true);
     publishState("boot");
   } else {
@@ -281,6 +336,7 @@ void setup() {
   }
   if (currentUs < SERVO_MIN_US || currentUs > SERVO_MAX_US) currentUs = 1500;
 
+  logEvent("boot rst=" + resetReasonName());
   connectWiFiAtBoot();
 
   configTime(0, 0, "pool.ntp.org", "time.google.com");
@@ -289,6 +345,7 @@ void setup() {
   tls.setTimeout(5000);
   tls.setHandshakeTimeout(8);
 
+  mqtt.setBufferSize(1024);
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setCallback(onMessage);
 
@@ -303,6 +360,7 @@ void loop() {
 
   if (mqtt.connected()) {
     mqtt.loop();
+    if (diagDirty) publishDiag(false);
   } else if (!servo.attached() && reached(nextMqttAttempt)) {
     // A connect attempt can block for several seconds; never do it while the servo is powered.
     nextMqttAttempt = millis() + MQTT_RETRY_MS;

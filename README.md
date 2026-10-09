@@ -32,6 +32,8 @@ Base topic: `ptac/joel_a83f2`
 | `<base>/state` (retained) | `{"us":N,"reason":"..."}` | Last position and why. Reasons: `boot`, `us`, `save_<MODE>`, `go_<MODE>`, `rejected_*`, `unknown_<MODE>`, `save_failed_<MODE>`, `rate_limited` |
 | `<base>/status` (retained) | `online` / `offline` | Robot presence. `offline` is the MQTT last-will, sent by the broker when the ESP32 drops |
 
+| `<base>/diag` (retained) | `{"up":s,"rssi":dBm,"heap":bytes,"ev":[last 8 events]}` | Remote diagnostics: boot reset reason (poweron/brownout/...), attach/release/state events, wifi_lost |
+
 Allowed modes (whitelisted in firmware): `OFF`, `HEAT3`, `HEAT2`, `COOL3`, `COOL2`.
 
 ## Firmware behavior

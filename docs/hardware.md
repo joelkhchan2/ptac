@@ -42,6 +42,13 @@ Still to confirm:
 5. **Public MQTT login.** The web page login is public by design. Its HiveMQ permissions must be restricted (see README, "Broker setup"); this has not been verified.
 6. **Credentials.** The old firmware sketch contained live credentials. Rotate anything that was ever pushed or published (see README, "Broker setup").
 
+## Findings log
+
+- 2026-10-08: first MG996R is dead; the second works. Verified on the bench with the servo powered from the ESP32's VIN pin over USB, signal on D13, brown on GND.
+- The firmware's servo output was measured from inside the chip: 50 Hz, 997/1485/1992 us pulses for 1000/1500/2000 us requested. Software and ESP32Servo are not the problem on core 3.3.12 / ESP32Servo 3.2.1.
+- A servo's 3-pin plug (brown GND, red 5V, yellow/orange signal) must NOT be plugged straight onto the ESP32 pins VIN, GND, D13: the order is reversed and puts 5V backwards on the servo. Use one jumper per wire.
+- Servo wired through the Arkare adapter, green DC terminal block and a chain of Dupont jumpers did not move; unresolved whether the adapter, a terminal contact or the first (dead) servo was responsible. Direct VIN power worked.
+- Pin map (30-pin dev board): right header from the USB end is VIN, GND, D13, D12, D14...; left header is 3V3, GND, D15, D2, D4...
 ## Parts list
 
 | Item | Notes |
