@@ -12,7 +12,7 @@ ESP32 + servo robot that turns the fan/mode knob on a PTAC unit, controlled via 
 - Do not touch the PTAC's mains wiring. Mechanical actuation of the knob only.
 - Presets (calibrated knob positions) live in the ESP32's flash under NVS namespace `ptac`. Do not rename the namespace or the keys; erasing flash loses calibration.
 - `SERVO_MIN_US` / `SERVO_MAX_US` and the UI deg-to-us mapping must be changed together, only after bench-finding the real range.
-- Status: firmware compiles clean (arduino-cli, esp32:esp32:esp32, core 3.3.12) but has not been flashed or bench-tested. Do not call it working until `docs/test-plan.md` gates 0-4 pass.
+- Status: firmware flashed 2026-10-08 and confirmed booting, joining Wi-Fi and connecting to the broker with verified TLS. Servo behavior is not yet bench-tested. Do not call it working until `docs/test-plan.md` gates 1-4 pass.
 
 ## Conventions
 

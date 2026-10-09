@@ -65,4 +65,4 @@ Open the page, Enable Manual, move the slider until the knob sits on the right m
 
 ## Status
 
-Firmware compiles but has not been flashed or tested on the real board since the rewrite. See `docs/hardware.md` for the open issues (dead servo, power, mounting) and `docs/test-plan.md` for the order to verify them.
+Firmware flashed 2026-10-08 and connects to the broker; servo behavior not yet bench-tested. See `docs/hardware.md` for the open issues (dead servo, power, mounting) and `docs/test-plan.md` for the order to verify them.
