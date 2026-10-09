@@ -176,12 +176,14 @@ client.on("reconnect", () => { connEl.textContent = "reconnecting…"; });
 client.on("offline", () => { connEl.textContent = "offline"; });
 client.on("error", () => { connEl.textContent = "error"; });
 
-client.on("message", (_, payload) => {
+client.on("message", (_, payload, packet) => {
   try {
     const s = JSON.parse(payload.toString());
 
-    // update "last update"
-    lastEl.textContent = new Date().toLocaleTimeString();
+    // retained = delivered on subscribe, so receipt time says nothing about when the state changed
+    lastEl.textContent = packet.retain
+      ? "unknown (showing last saved state)"
+      : new Date().toLocaleTimeString();
 
     // update slider + display from ESP32 state
     if (typeof s.us === "number") {
