@@ -3,16 +3,21 @@
 #include <PubSubClient.h>
 #include <Preferences.h>
 #include <ESP32Servo.h>
+#include <time.h>
 #include "secrets.h"
+#include "isrg_root_x1.h"
 
 /*
   PTAC Servo MQTT Controller (ESP32)
-  Topics (unchanged):
-    ptac/joel_a83f2/cmd/us            payload: 500-2500 (microseconds)
-    ptac/joel_a83f2/cmd/save/<MODE>   payload: 500-2500 (microseconds)
+  Topics:
+    ptac/joel_a83f2/cmd/us            payload: SERVO_MIN_US..SERVO_MAX_US
+    ptac/joel_a83f2/cmd/save/<MODE>   payload: SERVO_MIN_US..SERVO_MAX_US
     ptac/joel_a83f2/cmd/go/<MODE>     payload: anything
     ptac/joel_a83f2/state             retained {"us":N,"reason":"..."}
-  The servo is only powered (PWM attached) while moving plus HOLD_MS, then released.
+    ptac/joel_a83f2/status            retained "online" / "offline" (last will)
+  Modes: OFF, HEAT3, HEAT2, COOL3, COOL2.
+  The servo is powered only while moving plus HOLD_MS, never longer than
+  MAX_ATTACH_MS in a row, followed by COOLDOWN_MS in which moves are refused.
 */
 
 const char* TOPIC_CMD_PREFIX = "ptac/joel_a83f2/cmd/";
@@ -21,11 +26,22 @@ const char* TOPIC_US         = "ptac/joel_a83f2/cmd/us";
 const char* TOPIC_SAVE       = "ptac/joel_a83f2/cmd/save/";
 const char* TOPIC_GO         = "ptac/joel_a83f2/cmd/go/";
 const char* TOPIC_STATE      = "ptac/joel_a83f2/state";
+const char* TOPIC_STATUS     = "ptac/joel_a83f2/status";
+
+const char* PRESETS[] = {"OFF", "HEAT3", "HEAT2", "COOL3", "COOL2"};
 
 const int SERVO_PIN    = 13;
+// Bench-test the real usable range of the servo/knob and narrow these (and the UI mapping) to match.
 const int SERVO_MIN_US = 500;
 const int SERVO_MAX_US = 2500;
-const unsigned long HOLD_MS = 1000;
+
+const unsigned long HOLD_MS          = 1000;
+const unsigned long MAX_ATTACH_MS    = 6000;
+const unsigned long COOLDOWN_MS      = 6000;
+const unsigned long CMD_ARM_DELAY_MS = 2000;
+const unsigned long MQTT_RETRY_MS    = 3000;
+const unsigned long WIFI_RETRY_MS    = 5000;
+const unsigned long WIFI_RESTART_MS  = 60000;
 
 const char* NS_PRESETS = "ptac";
 const char* NS_STATE   = "ptac_state";
@@ -37,8 +53,18 @@ WiFiClientSecure tls;
 PubSubClient mqtt(tls);
 
 int currentUs = 1500;
-unsigned long releaseAt = 0;
 bool positionDirty = false;
+unsigned long releaseAt = 0;
+unsigned long attachedSince = 0;
+unsigned long cooldownUntil = 0;
+unsigned long armAt = 0;
+unsigned long nextMqttAttempt = 0;
+unsigned long nextWifiAttempt = 0;
+unsigned long wifiLostAt = 0;
+
+bool reached(unsigned long t) {
+  return (long)(millis() - t) >= 0;
+}
 
 bool parseUs(const String& s, int& out) {
   if (s.length() == 0 || s.length() > 4) return false;
@@ -49,13 +75,11 @@ bool parseUs(const String& s, int& out) {
   return out >= SERVO_MIN_US && out <= SERVO_MAX_US;
 }
 
-bool validName(const String& s) {
-  if (s.length() == 0 || s.length() > 15) return false;
-  for (unsigned int i = 0; i < s.length(); i++) {
-    char c = s[i];
-    if (!isAlphaNumeric(c) && c != '_') return false;
+bool isPreset(const String& s) {
+  for (const char* p : PRESETS) {
+    if (s == p) return true;
   }
-  return true;
+  return false;
 }
 
 void releaseServo() {
@@ -74,18 +98,27 @@ void releaseServo() {
 }
 
 void releaseIfIdle() {
-  if (servo.attached() && (long)(millis() - releaseAt) >= 0) releaseServo();
+  if (!servo.attached()) return;
+  if (reached(releaseAt)) {
+    releaseServo();
+  } else if (millis() - attachedSince >= MAX_ATTACH_MS) {
+    releaseServo();
+    cooldownUntil = millis() + COOLDOWN_MS;
+  }
 }
 
-void moveToUs(int us) {
+bool moveToUs(int us) {
+  if (!servo.attached() && !reached(cooldownUntil)) return false;
   currentUs = us;
   if (!servo.attached()) {
     servo.setPeriodHertz(50);
     servo.attach(SERVO_PIN, SERVO_MIN_US, SERVO_MAX_US);
+    attachedSince = millis();
   }
   servo.writeMicroseconds(currentUs);
   releaseAt = millis() + HOLD_MS;
   positionDirty = true;
+  return true;
 }
 
 void publishState(const String& reason) {
@@ -110,6 +143,8 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
   Serial.print(" payload=");
   Serial.println(msg);
 
+  // Retained commands are delivered right after subscribing; ignore them so a stale command is never replayed.
+  if (!reached(armAt)) return;
   if (!t.startsWith(TOPIC_CMD_PREFIX)) return;
 
   if (t == TOPIC_US) {
@@ -118,21 +153,25 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
       publishState("rejected_us");
       return;
     }
-    moveToUs(us);
-    publishState("us");
+    publishState(moveToUs(us) ? "us" : "rate_limited");
     return;
   }
 
   if (t.startsWith(TOPIC_SAVE)) {
     String name = t.substring(strlen(TOPIC_SAVE));
     int us;
-    if (!validName(name) || !parseUs(msg, us)) {
+    if (!isPreset(name) || !parseUs(msg, us)) {
       publishState("rejected_save");
       return;
     }
+    bool stored = false;
     if (prefs.begin(NS_PRESETS, false)) {
-      prefs.putInt(name.c_str(), us);
+      stored = prefs.putInt(name.c_str(), us) == sizeof(int);
       prefs.end();
+    }
+    if (!stored) {
+      publishState("save_failed_" + name);
+      return;
     }
     moveToUs(us);
     publishState("save_" + name);
@@ -141,7 +180,7 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
 
   if (t.startsWith(TOPIC_GO)) {
     String name = t.substring(strlen(TOPIC_GO));
-    if (!validName(name)) {
+    if (!isPreset(name)) {
       publishState("rejected_go");
       return;
     }
@@ -154,14 +193,14 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
       publishState("unknown_" + name);
       return;
     }
-    moveToUs(us);
-    publishState("go_" + name);
+    publishState(moveToUs(us) ? "go_" + name : String("rate_limited"));
     return;
   }
 }
 
-void connectWiFi() {
+void connectWiFiAtBoot() {
   WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
 
   Serial.print("WiFi connecting");
@@ -169,10 +208,8 @@ void connectWiFi() {
   while (WiFi.status() != WL_CONNECTED) {
     delay(300);
     Serial.print(".");
-    releaseIfIdle();
     if (millis() - start > 30000) {
       Serial.println("\nWiFi timeout, restarting...");
-      releaseServo();
       ESP.restart();
     }
   }
@@ -181,33 +218,53 @@ void connectWiFi() {
   Serial.println(WiFi.localIP());
 }
 
-void connectMQTT() {
-  mqtt.setServer(MQTT_HOST, MQTT_PORT);
-  mqtt.setCallback(onMessage);
+void maintainWiFi() {
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiLostAt = 0;
+    return;
+  }
+  if (wifiLostAt == 0) {
+    wifiLostAt = millis();
+    Serial.println("WiFi lost");
+  }
+  if (reached(nextWifiAttempt)) {
+    nextWifiAttempt = millis() + WIFI_RETRY_MS;
+    WiFi.reconnect();
+  }
+  if (millis() - wifiLostAt > WIFI_RESTART_MS) {
+    Serial.println("WiFi down too long, restarting...");
+    releaseServo();
+    ESP.restart();
+  }
+}
 
-  while (!mqtt.connected()) {
-    String clientId = "esp32-ptac-" + String((uint32_t)ESP.getEfuseMac(), HEX);
+bool timeSynced() {
+  return time(nullptr) > 1700000000;
+}
 
-    Serial.print("MQTT connecting as ");
-    Serial.print(clientId);
-    Serial.print(" ... ");
+void tryConnectMQTT() {
+  if (!timeSynced()) {
+    Serial.println("Waiting for NTP time (needed for TLS certificate check)");
+    return;
+  }
 
-    if (mqtt.connect(clientId.c_str(), MQTT_USER, MQTT_PASS)) {
-      Serial.println("connected");
-      bool subOk = mqtt.subscribe(TOPIC_CMD_ALL);
-      Serial.print("SUB ");
-      Serial.print(TOPIC_CMD_ALL);
-      Serial.println(subOk ? " ok" : " failed");
-      publishState("boot");
-    } else {
-      Serial.print("failed rc=");
-      Serial.print(mqtt.state());
-      Serial.println(" (retry in 2s)");
-      for (int i = 0; i < 20; i++) {
-        delay(100);
-        releaseIfIdle();
-      }
-    }
+  String clientId = "esp32-ptac-" + String((uint32_t)ESP.getEfuseMac(), HEX);
+  Serial.print("MQTT connecting as ");
+  Serial.print(clientId);
+  Serial.print(" ... ");
+
+  if (mqtt.connect(clientId.c_str(), MQTT_USER, MQTT_PASS, TOPIC_STATUS, 0, true, "offline")) {
+    Serial.println("connected");
+    bool subOk = mqtt.subscribe(TOPIC_CMD_ALL);
+    Serial.print("SUB ");
+    Serial.print(TOPIC_CMD_ALL);
+    Serial.println(subOk ? " ok" : " failed");
+    armAt = millis() + CMD_ARM_DELAY_MS;
+    mqtt.publish(TOPIC_STATUS, "online", true);
+    publishState("boot");
+  } else {
+    Serial.print("failed rc=");
+    Serial.println(mqtt.state());
   }
 }
 
@@ -224,29 +281,31 @@ void setup() {
   }
   if (currentUs < SERVO_MIN_US || currentUs > SERVO_MAX_US) currentUs = 1500;
 
-  connectWiFi();
+  connectWiFiAtBoot();
 
-  // Switch to tls.setCACert(<root CA PEM>) for strict validation
-  tls.setInsecure();
-  tls.setTimeout(15000);
+  configTime(0, 0, "pool.ntp.org", "time.google.com");
 
-  connectMQTT();
+  tls.setCACert(ISRG_ROOT_X1);
+  tls.setTimeout(5000);
+  tls.setHandshakeTimeout(8);
+
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  mqtt.setCallback(onMessage);
 
   Serial.println("READY");
 }
 
 void loop() {
   releaseIfIdle();
+  maintainWiFi();
 
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi lost, reconnecting...");
-    connectWiFi();
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  if (mqtt.connected()) {
+    mqtt.loop();
+  } else if (!servo.attached() && reached(nextMqttAttempt)) {
+    // A connect attempt can block for several seconds; never do it while the servo is powered.
+    nextMqttAttempt = millis() + MQTT_RETRY_MS;
+    tryConnectMQTT();
   }
-
-  if (!mqtt.connected()) {
-    Serial.println("MQTT disconnected, reconnecting...");
-    connectMQTT();
-  }
-
-  mqtt.loop();
 }

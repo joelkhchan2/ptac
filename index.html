@@ -7,7 +7,9 @@
 <meta name="theme-color" content="#0a84ff">
 
 <title>PTAC Control</title>
-<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<script src="https://unpkg.com/mqtt@5.16.0/dist/mqtt.min.js"
+        integrity="sha384-9WWboT9UtuPFRlOLq4FygQkcJxzYcpz8SXGkNyCEXM+44n14xzjNlrRKYZwuF/A6"
+        crossorigin="anonymous"></script>
 
 <style>
   body { font-family: Arial, sans-serif; margin: 18px; }
@@ -62,8 +64,13 @@
     <h2 style="margin:0;">PTAC Servo Control</h2>
     <div class="status">
       Connection: <span id="conn">connecting…</span>
+      • Robot: <span id="device">checking…</span>
       • Last update: <span id="last">—</span>
     </div>
+    <div class="hint" id="offlineNote" style="display:none;color:#b00020;">
+      Robot is offline, so commands will not reach it. The knob can always be turned by hand.
+    </div>
+    <div class="hint" id="notice" style="color:#b05a00;"></div>
   </div>
 
   <div class="row">
@@ -137,20 +144,32 @@ function usToDeg(us) {
 /* ======================================================
    THROTTLE / LOCKOUT
    - Slider publishes at most every THROTTLE_MS
+   - The latest value is always sent after the window (trailing edge)
    - Also skips publishes if value unchanged
 ====================================================== */
 const THROTTLE_MS = 120; // smooth enough, avoids spamming
 let lastPublishAt = 0;
 let lastSentUs = null;
+let pendingUs = null;
+let trailingTimer = null;
 
-function throttledPublishUs(us) {
-  const now = Date.now();
-  if (lastSentUs === us) return;
-  if (now - lastPublishAt < THROTTLE_MS) return;
+function flushPublishUs() {
+  clearTimeout(trailingTimer);
+  trailingTimer = null;
+  const us = pendingUs;
+  pendingUs = null;
+  if (us === null || us === lastSentUs) return;
 
-  lastPublishAt = now;
+  lastPublishAt = Date.now();
   lastSentUs = us;
   client.publish(`${BASE}/cmd/us`, String(us));
+}
+
+function throttledPublishUs(us) {
+  pendingUs = us;
+  const wait = THROTTLE_MS - (Date.now() - lastPublishAt);
+  if (wait <= 0) flushPublishUs();
+  else if (!trailingTimer) trailingTimer = setTimeout(flushPublishUs, wait);
 }
 
 /* ======================================================
@@ -170,13 +189,23 @@ const client = mqtt.connect(WS, {
 client.on("connect", () => {
   connEl.textContent = "connected";
   client.subscribe(`${BASE}/state`);
+  client.subscribe(`${BASE}/status`);
+  setTimeout(() => {
+    if (deviceState === "checking") setDevice("unknown");
+  }, 5000);
 });
 
 client.on("reconnect", () => { connEl.textContent = "reconnecting…"; });
 client.on("offline", () => { connEl.textContent = "offline"; });
 client.on("error", () => { connEl.textContent = "error"; });
 
-client.on("message", (_, payload, packet) => {
+client.on("message", (topic, payload, packet) => {
+  if (topic === `${BASE}/status`) {
+    const v = payload.toString().trim();
+    setDevice(v === "online" || v === "offline" ? v : "unknown");
+    return;
+  }
+
   try {
     const s = JSON.parse(payload.toString());
 
@@ -185,11 +214,18 @@ client.on("message", (_, payload, packet) => {
       ? "unknown (showing last saved state)"
       : new Date().toLocaleTimeString();
 
-    // update slider + display from ESP32 state
+    // update slider + display from ESP32 state (not while the user is dragging)
     if (typeof s.us === "number") {
       const d = usToDeg(s.us);
-      degSlider.value = d;
-      degVal.innerText = d;
+      lastSentUs = s.us;
+      if (!dragging) {
+        degSlider.value = d;
+        degVal.innerText = d;
+      }
+    }
+
+    if (!packet.retain && s.reason === "rate_limited") {
+      showNotice("The robot is cooling down and refused that move. Try again in a few seconds.");
     }
 
     // highlight active mode when a GO is executed
@@ -219,11 +255,40 @@ const manualHint = document.getElementById("manualHint");
 const modePill   = document.getElementById("modePill");
 const stopBtn    = document.getElementById("stopBtn");
 
+const deviceEl    = document.getElementById("device");
+const offlineNote = document.getElementById("offlineNote");
+const noticeEl    = document.getElementById("notice");
+
 let manualEnabled = false;
+let dragging = false;
+let deviceState = "checking";
+let noticeTimer = null;
+
+function showNotice(text) {
+  noticeEl.textContent = text;
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => { noticeEl.textContent = ""; }, 6000);
+}
+
+function refreshControls() {
+  const offline = deviceState === "offline";
+  document.querySelectorAll(".go, .set").forEach(b => { b.disabled = offline; });
+  stopBtn.disabled = offline;
+  manualBtn.disabled = offline;
+  degSlider.disabled = offline || !manualEnabled;
+  offlineNote.style.display = offline ? "block" : "none";
+}
+
+function setDevice(state) {
+  deviceState = state;
+  deviceEl.textContent = state === "unknown" ? "unknown (no status received)" : state;
+  if (state === "offline") setManual(false);
+  refreshControls();
+}
 
 function setManual(on) {
   manualEnabled = on;
-  degSlider.disabled = !on;
+  refreshControls();
   sliderWrap.classList.toggle("enabled", on);
 
   if (on) {
@@ -249,6 +314,10 @@ degSlider.oninput = () => {
   const us = degToUs(deg);
   throttledPublishUs(us);
 };
+
+degSlider.addEventListener("pointerdown", () => { dragging = true; });
+window.addEventListener("pointerup", () => { dragging = false; });
+degSlider.onchange = () => { if (manualEnabled) flushPublishUs(); };
 
 function setActive(modeKey) {
   document.querySelectorAll(".go").forEach(btn => {
@@ -280,6 +349,7 @@ MODES.forEach(m => {
       alert("Enable Manual first to calibrate.");
       return;
     }
+    flushPublishUs();
     const deg = parseInt(degSlider.value, 10);
     const us  = degToUs(deg);
     client.publish(`${BASE}/cmd/save/${m.key}`, String(us));
