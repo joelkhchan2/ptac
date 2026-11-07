@@ -60,6 +60,7 @@ bool positionDirty = false;
 unsigned long releaseAt = 0;
 unsigned long attachedSince = 0;
 unsigned long cooldownUntil = 0;
+bool cooling = false; // cooldownUntil is only valid while this is set (a 0 timestamp breaks reached() after 24.8 days uptime)
 unsigned long armAt = 0;
 unsigned long nextMqttAttempt = 0;
 unsigned long nextWifiAttempt = 0;
@@ -156,11 +157,13 @@ void releaseIfIdle() {
   } else if (millis() - attachedSince >= MAX_ATTACH_MS) {
     releaseServo(true);
     cooldownUntil = millis() + COOLDOWN_MS;
+    cooling = true;
   }
 }
 
 bool moveToUs(int us) {
-  if (!servo.attached() && !reached(cooldownUntil)) return false;
+  if (cooling && reached(cooldownUntil)) cooling = false;
+  if (cooling && !servo.attached()) return false;
   currentUs = us;
   if (!servo.attached()) {
     servo.setPeriodHertz(50);
