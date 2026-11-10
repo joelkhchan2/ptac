@@ -5,6 +5,7 @@
 #include <ESP32Servo.h>
 #include <time.h>
 #include <esp_system.h>
+#include <esp_timer.h>
 #include "secrets.h"
 #include "isrg_root_x1.h"
 
@@ -57,12 +58,12 @@ PubSubClient mqtt(tls);
 
 int currentUs = 1500;
 bool positionDirty = false;
-unsigned long releaseAt = 0;
+uint64_t releaseAt = 0;
 unsigned long attachedSince = 0;
-unsigned long cooldownUntil = 0;
-unsigned long armAt = 0;
-unsigned long nextMqttAttempt = 0;
-unsigned long nextWifiAttempt = 0;
+uint64_t cooldownUntil = 0;
+uint64_t armAt = 0;
+uint64_t nextMqttAttempt = 0;
+uint64_t nextWifiAttempt = 0;
 unsigned long wifiLostAt = 0;
 
 const int EV_MAX = 8;
@@ -113,8 +114,13 @@ void logEvent(const String& e, bool force = false) {
   publishDiag(force);
 }
 
-bool reached(unsigned long t) {
-  return (long)(millis() - t) >= 0;
+// 64-bit milliseconds since boot. Deadlines must not use 32-bit millis(): a signed compare breaks after 24.8 days.
+uint64_t nowMs() {
+  return (uint64_t)esp_timer_get_time() / 1000ULL;
+}
+
+bool reached(uint64_t t) {
+  return nowMs() >= t;
 }
 
 bool parseUs(const String& s, int& out) {
@@ -155,7 +161,7 @@ void releaseIfIdle() {
     releaseServo();
   } else if (millis() - attachedSince >= MAX_ATTACH_MS) {
     releaseServo(true);
-    cooldownUntil = millis() + COOLDOWN_MS;
+    cooldownUntil = nowMs() + COOLDOWN_MS;
   }
 }
 
@@ -169,7 +175,7 @@ bool moveToUs(int us) {
     logEvent(String("attach us=") + currentUs);
   }
   servo.writeMicroseconds(currentUs);
-  releaseAt = millis() + HOLD_MS;
+  releaseAt = nowMs() + HOLD_MS;
   positionDirty = true;
   return true;
 }
@@ -282,7 +288,7 @@ void maintainWiFi() {
     logEvent("wifi_lost");
   }
   if (reached(nextWifiAttempt)) {
-    nextWifiAttempt = millis() + WIFI_RETRY_MS;
+    nextWifiAttempt = nowMs() + WIFI_RETRY_MS;
     WiFi.reconnect();
   }
   if (millis() - wifiLostAt > WIFI_RESTART_MS) {
@@ -313,7 +319,7 @@ void tryConnectMQTT() {
     Serial.print("SUB ");
     Serial.print(TOPIC_CMD_ALL);
     Serial.println(subOk ? " ok" : " failed");
-    armAt = millis() + CMD_ARM_DELAY_MS;
+    armAt = nowMs() + CMD_ARM_DELAY_MS;
     logEvent("mqtt_connected", true);
     mqtt.publish(TOPIC_STATUS, "online", true);
     publishState("boot");
@@ -363,7 +369,7 @@ void loop() {
     if (diagDirty) publishDiag(false);
   } else if (!servo.attached() && reached(nextMqttAttempt)) {
     // A connect attempt can block for several seconds; never do it while the servo is powered.
-    nextMqttAttempt = millis() + MQTT_RETRY_MS;
+    nextMqttAttempt = nowMs() + MQTT_RETRY_MS;
     tryConnectMQTT();
   }
 }
