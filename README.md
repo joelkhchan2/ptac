@@ -43,7 +43,8 @@ Allowed modes (whitelisted in firmware): `OFF`, `HEAT3`, `HEAT2`, `COOL3`, `COOL
 - Commands received in the first 2 s after subscribing are ignored, so a retained command is never replayed after a reboot. To clear a stuck retained command, publish an empty retained payload to the same topic.
 - Payloads are digits-only and range-checked; rejected rather than clamped.
 - TLS is verified against ISRG Root X1. The ESP32 needs NTP time before it will connect to the broker.
-- Reconnects never block while the servo is powered.
+- Reconnects never block while the servo is powered. `state` and `diag` messages are queued and sent after the servo is released.
+- If the broker connection stays down for 15 minutes the ESP32 restarts itself (nothing moves at boot).
 
 ## Firmware setup
 
@@ -63,7 +64,7 @@ Rotate any credential that was ever committed, pushed or built into a published 
 
 ## Calibrating presets
 
-Open the page, Enable Manual, move the slider until the knob sits on the right mark, press Set on that mode's row. Repeat per mode. Only do this after the bench tests in `docs/test-plan.md`.
+Open the page, Enable Manual, move the slider until the knob sits on the right mark (the servo moves when you release the slider), press Set on that mode's row. Repeat per mode. Only do this after the bench tests in `docs/test-plan.md`.
 
 ## Status
 
