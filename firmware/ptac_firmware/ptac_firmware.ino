@@ -46,6 +46,7 @@ const unsigned long CMD_ARM_DELAY_MS = 2000;
 const unsigned long MQTT_RETRY_MS    = 3000;
 const unsigned long WIFI_RETRY_MS    = 5000;
 const unsigned long WIFI_RESTART_MS  = 60000;
+const unsigned long MQTT_RESTART_MS  = 900000; // restart if the broker is unreachable this long (15 min)
 
 const char* NS_PRESETS = "ptac";
 const char* NS_STATE   = "ptac_state";
@@ -65,6 +66,10 @@ uint64_t armAt = 0;
 uint64_t nextMqttAttempt = 0;
 uint64_t nextWifiAttempt = 0;
 unsigned long wifiLostAt = 0;
+bool mqttDown = false;
+unsigned long mqttDownAt = 0;
+String pendingState;
+bool statePending = false;
 
 const int EV_MAX = 8;
 String events[EV_MAX];
@@ -88,7 +93,7 @@ String resetReasonName() {
 
 void publishDiag(bool force) {
   if (!mqtt.connected()) return;
-  if (!force && millis() - lastDiagAt < 1000) {
+  if (servo.attached() || (!force && millis() - lastDiagAt < 1000)) {
     diagDirty = true;
     return;
   }
@@ -183,7 +188,19 @@ bool moveToUs(int us) {
 void publishState(const String& reason) {
   logEvent("state " + reason + " us=" + currentUs);
   String msg = String("{\"us\":") + currentUs + ",\"reason\":\"" + reason + "\"}";
+  if (servo.attached()) {
+    // Network writes can block for seconds on a bad link; send after the servo is released instead.
+    pendingState = msg;
+    statePending = true;
+    return;
+  }
   mqtt.publish(TOPIC_STATE, msg.c_str(), true);
+}
+
+void flushPendingState() {
+  if (!statePending || servo.attached()) return;
+  statePending = false;
+  mqtt.publish(TOPIC_STATE, pendingState.c_str(), true);
 }
 
 String payloadToString(byte* payload, unsigned int len) {
@@ -298,6 +315,23 @@ void maintainWiFi() {
   }
 }
 
+void watchMqtt() {
+  if (mqtt.connected()) {
+    mqttDown = false;
+    return;
+  }
+  if (!mqttDown) {
+    mqttDown = true;
+    mqttDownAt = millis();
+    return;
+  }
+  if (millis() - mqttDownAt >= MQTT_RESTART_MS && !servo.attached()) {
+    Serial.println("MQTT down too long, restarting...");
+    releaseServo();
+    ESP.restart();
+  }
+}
+
 bool timeSynced() {
   return time(nullptr) > 1700000000;
 }
@@ -320,6 +354,7 @@ void tryConnectMQTT() {
     Serial.print(TOPIC_CMD_ALL);
     Serial.println(subOk ? " ok" : " failed");
     armAt = nowMs() + CMD_ARM_DELAY_MS;
+    statePending = false; // a stale queued state must not overwrite the boot state
     logEvent("mqtt_connected", true);
     mqtt.publish(TOPIC_STATUS, "online", true);
     publishState("boot");
@@ -361,11 +396,13 @@ void setup() {
 void loop() {
   releaseIfIdle();
   maintainWiFi();
+  watchMqtt();
 
   if (WiFi.status() != WL_CONNECTED) return;
 
   if (mqtt.connected()) {
     mqtt.loop();
+    flushPendingState();
     if (diagDirty) publishDiag(false);
   } else if (!servo.attached() && reached(nextMqttAttempt)) {
     // A connect attempt can block for several seconds; never do it while the servo is powered.

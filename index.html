@@ -142,34 +142,17 @@ function usToDeg(us) {
 }
 
 /* ======================================================
-   THROTTLE / LOCKOUT
-   - Slider publishes at most every THROTTLE_MS
-   - The latest value is always sent after the window (trailing edge)
-   - Also skips publishes if value unchanged
+   SLIDER PUBLISH
+   - Dragging only updates the on-screen angle; one move is sent on release.
+     Streaming moves keeps the servo powered past the firmware's 6 s cap.
+   - Skips the publish if the value is unchanged
 ====================================================== */
-const THROTTLE_MS = 120; // smooth enough, avoids spamming
-let lastPublishAt = 0;
 let lastSentUs = null;
-let pendingUs = null;
-let trailingTimer = null;
 
-function flushPublishUs() {
-  clearTimeout(trailingTimer);
-  trailingTimer = null;
-  const us = pendingUs;
-  pendingUs = null;
-  if (us === null || us === lastSentUs) return;
-
-  lastPublishAt = Date.now();
+function publishUs(us) {
+  if (us === lastSentUs) return;
   lastSentUs = us;
   client.publish(`${BASE}/cmd/us`, String(us));
-}
-
-function throttledPublishUs(us) {
-  pendingUs = us;
-  const wait = THROTTLE_MS - (Date.now() - lastPublishAt);
-  if (wait <= 0) flushPublishUs();
-  else if (!trailingTimer) trailingTimer = setTimeout(flushPublishUs, wait);
 }
 
 /* ======================================================
@@ -307,17 +290,14 @@ function setManual(on) {
 manualBtn.onclick = () => setManual(!manualEnabled);
 
 degSlider.oninput = () => {
-  const deg = parseInt(degSlider.value, 10);
-  degVal.innerText = deg;
-
-  if (!manualEnabled) return; // hard block
-  const us = degToUs(deg);
-  throttledPublishUs(us);
+  degVal.innerText = parseInt(degSlider.value, 10);
 };
 
 degSlider.addEventListener("pointerdown", () => { dragging = true; });
 window.addEventListener("pointerup", () => { dragging = false; });
-degSlider.onchange = () => { if (manualEnabled) flushPublishUs(); };
+degSlider.onchange = () => {
+  if (manualEnabled) publishUs(degToUs(parseInt(degSlider.value, 10)));
+};
 
 function setActive(modeKey) {
   document.querySelectorAll(".go").forEach(btn => {
@@ -349,7 +329,6 @@ MODES.forEach(m => {
       alert("Enable Manual first to calibrate.");
       return;
     }
-    flushPublishUs();
     const deg = parseInt(degSlider.value, 10);
     const us  = degToUs(deg);
     client.publish(`${BASE}/cmd/save/${m.key}`, String(us));
